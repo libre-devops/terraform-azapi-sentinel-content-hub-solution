@@ -1,6 +1,10 @@
 # Plan-time tests with a mocked azapi provider: no cloud, no credentials. They pin the workspace id
 # parsing (a plain id and a Sentinel onboarding id both resolve), the ARM deployment name derivation
 # including the 64 character cap, and every input validation.
+#
+# Needs Terraform 1.17 or later: the template is read through an ephemeral resource, and 1.17 is the
+# first release whose mock providers accept ephemeral resource types (mock_ephemeral below). Earlier
+# versions fail validation with "No ephemeral resource types in mock providers".
 
 mock_provider "azapi" {
   # The catalog projection is keyed by the content id with dots and hyphens folded to underscores,
@@ -40,12 +44,21 @@ mock_provider "azapi" {
     }
   }
 
-  # Serves both uses of this data source: the workspace read (location) and the package read
-  # (template). The module only ever touches the attribute relevant to each.
+  # Serves both uses of this data source: the workspace read (location) and the package read (its
+  # JMESPath projections, which fall back to empty when absent). The module only ever touches the
+  # attribute relevant to each.
   mock_data "azapi_resource" {
     defaults = {
       output = {
         location = "uksouth"
+      }
+    }
+  }
+
+  # The ephemeral template read that feeds the install's sensitive_body.
+  mock_ephemeral "azapi_resource_action" {
+    defaults = {
+      output = {
         template = {
           parameters = {
             location             = {}

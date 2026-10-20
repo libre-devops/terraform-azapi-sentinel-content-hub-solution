@@ -16,9 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tests/ needs Terraform 1.17 for mock_ephemeral. Pinned to the release candidate until 1.17.0
+      # is GA, then move to "~> 1.17".
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~> 1.15"
+          terraform_version: "1.17.0-rc2"
 
       - name: PSScriptAnalyzer
         shell: pwsh

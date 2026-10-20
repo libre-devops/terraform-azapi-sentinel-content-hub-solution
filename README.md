@@ -143,12 +143,14 @@ warns when a solution's template passes 75 percent of the ARM template limit of 
 
 ## Notes worth knowing
 
-- **State size.** Solution templates are large, and this module holds one copy per solution in state
-  (Microsoft Defender XDR alone is 1.9 MB). Three solutions is roughly 4.4 MB of state. The template
-  is passed to the install through azapi's `sensitive_body`, a write-only argument, so it is stored
-  once rather than twice. Reading it through an ephemeral resource would keep it out of state
-  entirely, but Terraform's test framework cannot mock ephemeral resource types, which would cost
-  every plan-time unit test in `tests/`. That trade is revisitable when the limitation lifts.
+- **State and plan size.** Solution templates are large (Microsoft Defender XDR alone is 1.9 MB), so
+  the template is never stored. It is read through an ephemeral `azapi_resource_action` and passed to
+  the install's `sensitive_body`, a write-only argument, so it reaches Azure without entering the plan
+  or the state. This matters beyond state size: Terraform Stacks streams each resource instance's
+  planned change to Terraform Core as one gRPC message capped at 4 MiB, and holding the template in a
+  data source's result breached that, failing the apply with "received message larger than max".
+  Running `tests/` needs Terraform 1.17 or later, the first release with `mock_ephemeral`; consuming
+  the module does not.
 - **ARM template limit.** A solution installs as one ARM deployment, so it is bound by the 4 MB
   template limit. Microsoft Defender XDR (374 content templates) sits at 1.9 MB today.
 - **Deployment names.** Derived from the content id and capped at the ARM limit of 64 characters. The
@@ -169,13 +171,13 @@ None. `tflint` and `trivy` are clean on the module and both examples, so there i
 | Name | Version |
 |------|---------|
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.11.0, < 2.0.0 |
-| <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) | >= 2.0.0, < 3.0.0 |
+| <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) | >= 2.3.0, < 3.0.0 |
 
 ## Providers
 
 | Name | Version |
 |------|---------|
-| <a name="provider_azapi"></a> [azapi](#provider\_azapi) | >= 2.0.0, < 3.0.0 |
+| <a name="provider_azapi"></a> [azapi](#provider\_azapi) | >= 2.3.0, < 3.0.0 |
 
 ## Modules
 

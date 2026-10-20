@@ -62,17 +62,11 @@ data "azapi_resource_list" "catalog_discovery" {
   }
 }
 
-# The package's packagedContent (the ARM template that installs it) plus three cheap JMESPath
-# projections describing it, all evaluated provider-side. Note the expand path is
-# properties/packagedContent: the bare property name is rejected.
+# Three cheap JMESPath projections describing the package's packagedContent (the ARM template that
+# installs it), all evaluated provider-side. Note the expand path is properties/packagedContent: the
+# bare property name is rejected.
 #
-# STATE SIZE: the template is genuinely large (Microsoft Defender XDR is 1.9 MB, and this data source
-# is where it lands). It is read once here and passed to sensitive_body below, which is a write-only
-# argument, so only ONE copy is persisted rather than two. Reading it through an ephemeral resource
-# would keep it out of state entirely, but Terraform's test framework cannot mock ephemeral resource
-# types ("No ephemeral resource types in mock providers"), which would mean giving up every plan-time
-# unit test in tests/. The tests are worth more than the bytes, so this stays a data source until
-# that limitation is lifted.
+# The template itself is deliberately NOT exported here: see the ephemeral read below.
 data "azapi_resource" "package" {
   for_each = var.solutions
 
@@ -85,7 +79,6 @@ data "azapi_resource" "package" {
     parameter_names = "keys(properties.packagedContent.parameters)"
     resource_types  = "properties.packagedContent.resources[].type"
     template_bytes  = "length(to_string(properties.packagedContent))"
-    template        = "properties.packagedContent"
   }
 
   lifecycle {
@@ -105,6 +98,34 @@ data "azapi_resource" "package" {
       condition     = each.value.allow_deprecated || !local.catalog_resolved[each.key].deprecated
       error_message = "Solution '${each.key}' is flagged deprecated in the Content Hub catalog. Set allow_deprecated = true on it to install anyway."
     }
+  }
+}
+
+# The template itself, read ephemerally so it never reaches the plan or the state.
+#
+# It used to be exported from the data source above, but a data source's result is carried in every
+# plan, and Terraform Stacks streams each resource instance's planned change to Terraform Core as one
+# gRPC message capped at 4 MiB. The serialised result (the template plus its implied type) outgrew
+# that, failing the apply with "streaming plan to Terraform Core ... received message larger than
+# max". Solution templates tend to grow release on release, so the fix is to keep the template out of
+# the plan entirely rather than to shrink it. It feeds sensitive_body below, a write-only argument, which accepts an
+# ephemeral value.
+#
+# resource_id is taken from the data source rather than rebuilt, so this read waits for the
+# preconditions above and a bad content id fails with their message rather than a 404 here. Testing
+# it needs Terraform 1.17 or later, the first release whose mock providers support ephemeral
+# resources (mock_ephemeral in tests/).
+ephemeral "azapi_resource_action" "template" {
+  for_each = var.solutions
+
+  type        = "Microsoft.SecurityInsights/contentProductPackages@${var.catalog_api_version}"
+  resource_id = data.azapi_resource.package[each.key].resource_id
+  method      = "GET"
+
+  query_parameters = { "$expand" = ["properties/packagedContent"] }
+
+  response_export_values = {
+    template = "properties.packagedContent"
   }
 }
 
@@ -145,9 +166,9 @@ resource "azapi_resource" "package" {
   }
 }
 
-# The install itself. The template goes in sensitive_body so a 2 MB blob does not flood every plan,
-# and sensitive_body_version keys redeployment off the solution version rather than a byte comparison
-# of that blob.
+# The install itself. The template comes from the ephemeral read above and goes in sensitive_body, a
+# write-only argument, so it is sent to Azure without being stored anywhere. sensitive_body_version
+# keys redeployment off the solution version, since there is no stored copy to compare against.
 resource "azapi_resource" "install" {
   for_each = var.solutions
 
@@ -164,7 +185,7 @@ resource "azapi_resource" "install" {
 
   sensitive_body = {
     properties = {
-      template = data.azapi_resource.package[each.key].output.template
+      template = ephemeral.azapi_resource_action.template[each.key].output.template
     }
   }
 
